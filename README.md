@@ -67,4 +67,11 @@ Dokumentacja obejmie porównanie architektury, opis przeniesionych funkcji, scre
 
 ## Zespół projektowy
 
-- **Oskar Kruszczyński — 60582** — https://github.com/Kruch
+- Oskar Kruszczyński — 60582 — https://github.com/Kruchyx
+- Mateusz Polasik — 60584 — https://github.com/polasiniewrocil
+- Oscar Nowak — 60583 — https://github.com/oscarnowak03
+- Szymon Żygas — 40891 — https://github.com/CwieczeniaSzymonZygas
+
+## Termin realizacji
+
+15 lutego 2027 r.
