@@ -27,13 +27,24 @@ class SystemMetaliApp extends StatelessWidget {
   }
 }
 
+// Na etapie v0.2 korzystamy z cen demonstracyjnych, w PLN za uncję.
+const double demoGoldPricePlnOz = 12150;
+const double demoSilverPricePlnOz = 154;
+
+String formatDate(DateTime date) =>
+    '${date.day.toString().padLeft(2, '0')}.${date.month.toString().padLeft(2, '0')}.${date.year}';
+
 class Investment {
+  final int id;
+  final DateTime date;
   final String metal;
   final double ounces;
   final double purchasePricePlnOz;
   final double currentPricePlnOz;
 
   const Investment({
+    required this.id,
+    required this.date,
     required this.metal,
     required this.ounces,
     required this.purchasePricePlnOz,
@@ -43,6 +54,8 @@ class Investment {
   double get purchaseValue => ounces * purchasePricePlnOz;
   double get currentValue => ounces * currentPricePlnOz;
   double get profit => currentValue - purchaseValue;
+  double get roi =>
+      purchaseValue == 0 ? 0 : (profit / purchaseValue) * 100;
 }
 
 class MainScreen extends StatefulWidget {
@@ -55,19 +68,24 @@ class MainScreen extends StatefulWidget {
 class _MainScreenState extends State<MainScreen> {
   int selectedIndex = 0;
 
-  // Przykładowe inwestycje. W następnym etapie dodamy własne transakcje.
-  static const investments = <Investment>[
+  // Transakcje przykładowe; użytkownik może je usunąć.
+  // Zapis danych między uruchomieniami dodamy w kolejnym etapie.
+  final List<Investment> investments = [
     Investment(
+      id: 1,
+      date: DateTime(2026, 11, 1),
       metal: 'Złoto',
       ounces: 0.75,
       purchasePricePlnOz: 11600,
-      currentPricePlnOz: 12150,
+      currentPricePlnOz: demoGoldPricePlnOz,
     ),
     Investment(
+      id: 2,
+      date: DateTime(2026, 11, 2),
       metal: 'Srebro',
       ounces: 12,
       purchasePricePlnOz: 145,
-      currentPricePlnOz: 154,
+      currentPricePlnOz: demoSilverPricePlnOz,
     ),
   ];
 
@@ -97,6 +115,45 @@ class _MainScreenState extends State<MainScreen> {
     return '${value < 0 ? '-' : ''}${groups.join(' ')},${parts[1]} zł';
   }
 
+  Future<void> _addTransaction() async {
+    final transaction = await showModalBottomSheet<Investment>(
+      context: context,
+      isScrollControlled: true,
+      useSafeArea: true,
+      showDragHandle: true,
+      builder: (context) => const TransactionForm(),
+    );
+    if (!mounted || transaction == null) return;
+    setState(() => investments.add(transaction));
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('Transakcja została dodana')),
+    );
+  }
+
+  Future<void> _deleteTransaction(Investment investment) async {
+    final shouldDelete = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Usunąć transakcję?'),
+        content: Text(
+          '${investment.metal} — ${investment.ounces.toString().replaceAll('.', ',')} oz',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Anuluj'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Usuń'),
+          ),
+        ],
+      ),
+    );
+    if (!mounted || shouldDelete != true) return;
+    setState(() => investments.removeWhere((tx) => tx.id == investment.id));
+  }
+
   @override
   Widget build(BuildContext context) {
     const titles = ['Portfel', 'Transakcje', 'Kursy', 'Wykresy'];
@@ -107,9 +164,19 @@ class _MainScreenState extends State<MainScreen> {
           style: TextStyle(fontWeight: FontWeight.w700, fontSize: 19),
         ),
       ),
-      body: selectedIndex == 0
-          ? _portfolioScreen()
-          : _comingSoonScreen(titles[selectedIndex]),
+      body: switch (selectedIndex) {
+        0 => _portfolioScreen(),
+        1 => _transactionsScreen(),
+        _ => _comingSoonScreen(titles[selectedIndex]),
+      },
+      floatingActionButton: selectedIndex == 1
+          ? FloatingActionButton.extended(
+              key: const ValueKey('add_transaction_button'),
+              onPressed: _addTransaction,
+              icon: const Icon(Icons.add),
+              label: const Text('Dodaj zakup'),
+            )
+          : null,
       bottomNavigationBar: NavigationBar(
         selectedIndex: selectedIndex,
         onDestinationSelected: (index) {
@@ -207,10 +274,15 @@ class _MainScreenState extends State<MainScreen> {
               style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
             ),
             const SizedBox(height: 12),
+            if (investments.isEmpty)
+              const Padding(
+                padding: EdgeInsets.symmetric(vertical: 28),
+                child: Text('Brak transakcji. Dodaj pierwszy zakup w zakładce Transakcje.'),
+              ),
             for (final investment in investments) _investmentCard(investment),
             const SizedBox(height: 14),
             const Text(
-              'Następny etap: formularz dodawania transakcji i zapis danych.',
+              'Aby dodać lub usunąć zakup, przejdź do zakładki Transakcje.',
               style: TextStyle(color: Color(0xFF64748B), fontSize: 13),
             ),
           ],
@@ -243,10 +315,7 @@ class _MainScreenState extends State<MainScreen> {
               const SizedBox(height: 13),
               Text(
                 title,
-                style: const TextStyle(
-                  color: Color(0xFF64748B),
-                  fontSize: 12,
-                ),
+                style: const TextStyle(color: Color(0xFF64748B), fontSize: 12),
               ),
               const SizedBox(height: 6),
               FittedBox(
@@ -335,6 +404,53 @@ class _MainScreenState extends State<MainScreen> {
     );
   }
 
+  Widget _transactionsScreen() {
+    return Center(
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 660),
+        child: ListView(
+          padding: const EdgeInsets.fromLTRB(16, 16, 16, 100),
+          children: [
+            const Text(
+              'Historia transakcji',
+              style: TextStyle(fontSize: 27, fontWeight: FontWeight.bold),
+            ),
+            const SizedBox(height: 6),
+            Text(
+              '${investments.length} ${investments.length == 1 ? 'transakcja' : 'transakcje'}',
+              key: const ValueKey('transaction_count'),
+              style: const TextStyle(color: Color(0xFF64748B)),
+            ),
+            const SizedBox(height: 16),
+            if (investments.isEmpty)
+              const Padding(
+                padding: EdgeInsets.symmetric(vertical: 35),
+                child: Center(child: Text('Nie masz jeszcze żadnych transakcji.')),
+              ),
+            for (final tx in investments.reversed)
+              Card(
+                color: Colors.white,
+                child: ListTile(
+                  title: Text('${tx.metal} • ${tx.ounces.toString().replaceAll('.', ',')} oz'),
+                  subtitle: Text(
+                    '${formatDate(tx.date)}  ·  Cena zakupu: ${pln(tx.purchasePricePlnOz)}/oz\n'
+                    'Wartość zakupu: ${pln(tx.purchaseValue)}',
+                  ),
+                  isThreeLine: true,
+                  trailing: IconButton(
+                    key: ValueKey('delete_transaction_${tx.id}'),
+                    onPressed: () => _deleteTransaction(tx),
+                    tooltip: 'Usuń transakcję',
+                    icon: const Icon(Icons.delete_outline),
+                  ),
+                ),
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+
   Widget _comingSoonScreen(String title) {
     return Center(
       child: Padding(
@@ -354,6 +470,149 @@ class _MainScreenState extends State<MainScreen> {
               'Ten ekran przygotujemy w kolejnym etapie migracji.',
               textAlign: TextAlign.center,
               style: TextStyle(color: Color(0xFF64748B)),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class TransactionForm extends StatefulWidget {
+  const TransactionForm({super.key});
+
+  @override
+  State<TransactionForm> createState() => _TransactionFormState();
+}
+
+class _TransactionFormState extends State<TransactionForm> {
+  final formKey = GlobalKey<FormState>();
+  final amountController = TextEditingController();
+  final priceController = TextEditingController();
+  String metal = 'Złoto';
+  DateTime date = DateTime.now();
+
+  @override
+  void dispose() {
+    amountController.dispose();
+    priceController.dispose();
+    super.dispose();
+  }
+
+  double? _parsePositiveNumber(String? input) {
+    final normalized = (input ?? '').trim().replaceAll(' ', '').replaceAll(',', '.');
+    final value = double.tryParse(normalized);
+    if (value == null || !value.isFinite || value <= 0) return null;
+    return value;
+  }
+
+  Future<void> _pickDate() async {
+    final chosen = await showDatePicker(
+      context: context,
+      initialDate: date,
+      firstDate: DateTime(2000),
+      lastDate: DateTime(2100),
+    );
+    if (chosen != null && mounted) setState(() => date = chosen);
+  }
+
+  void _submit() {
+    if (!formKey.currentState!.validate()) return;
+    final ounces = _parsePositiveNumber(amountController.text)!;
+    final purchasePrice = _parsePositiveNumber(priceController.text)!;
+    Navigator.pop(
+      context,
+      Investment(
+        id: DateTime.now().microsecondsSinceEpoch,
+        date: date,
+        metal: metal,
+        ounces: ounces,
+        purchasePricePlnOz: purchasePrice,
+        currentPricePlnOz:
+            metal == 'Złoto' ? demoGoldPricePlnOz : demoSilverPricePlnOz,
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return SingleChildScrollView(
+      padding: EdgeInsets.fromLTRB(
+        20,
+        8,
+        20,
+        MediaQuery.viewInsetsOf(context).bottom + 24,
+      ),
+      child: Form(
+        key: formKey,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            const Text(
+              'Dodaj transakcję',
+              style: TextStyle(fontSize: 23, fontWeight: FontWeight.bold),
+            ),
+            const SizedBox(height: 8),
+            const Text(
+              'Ceny bieżące są demonstracyjne. Ilość i cenę zakupu podajesz samodzielnie.',
+              style: TextStyle(color: Color(0xFF64748B)),
+            ),
+            const SizedBox(height: 18),
+            DropdownButtonFormField<String>(
+              initialValue: metal,
+              decoration: const InputDecoration(
+                labelText: 'Metal',
+                border: OutlineInputBorder(),
+              ),
+              items: const [
+                DropdownMenuItem(value: 'Złoto', child: Text('Złoto')),
+                DropdownMenuItem(value: 'Srebro', child: Text('Srebro')),
+              ],
+              onChanged: (value) {
+                if (value != null) setState(() => metal = value);
+              },
+            ),
+            const SizedBox(height: 14),
+            TextFormField(
+              key: const ValueKey('amount_field'),
+              controller: amountController,
+              keyboardType: const TextInputType.numberWithOptions(decimal: true),
+              decoration: const InputDecoration(
+                labelText: 'Ilość (oz)',
+                hintText: 'np. 0,5',
+                border: OutlineInputBorder(),
+              ),
+              validator: (value) => _parsePositiveNumber(value) == null
+                  ? 'Podaj ilość większą od zera'
+                  : null,
+            ),
+            const SizedBox(height: 14),
+            TextFormField(
+              key: const ValueKey('price_field'),
+              controller: priceController,
+              keyboardType: const TextInputType.numberWithOptions(decimal: true),
+              decoration: const InputDecoration(
+                labelText: 'Cena zakupu (PLN/oz)',
+                hintText: 'np. 12000',
+                border: OutlineInputBorder(),
+              ),
+              validator: (value) => _parsePositiveNumber(value) == null
+                  ? 'Podaj cenę większą od zera'
+                  : null,
+            ),
+            const SizedBox(height: 12),
+            OutlinedButton.icon(
+              onPressed: _pickDate,
+              icon: const Icon(Icons.calendar_today_outlined),
+              label: Text('Data zakupu: ${formatDate(date)}'),
+            ),
+            const SizedBox(height: 18),
+            FilledButton.icon(
+              key: const ValueKey('save_transaction_button'),
+              onPressed: _submit,
+              icon: const Icon(Icons.check),
+              label: const Text('Zapisz transakcję'),
             ),
           ],
         ),
