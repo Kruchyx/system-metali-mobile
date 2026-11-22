@@ -1,6 +1,19 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:system_metali_mobile/main.dart';
+import 'package:system_metali_mobile/portfolio_storage.dart';
+
+class MemoryPortfolioStorage implements PortfolioStorage {
+  String? data;
+
+  @override
+  Future<String?> read() async => data;
+
+  @override
+  Future<void> write(String json) async {
+    data = json;
+  }
+}
 
 void main() {
   test('1 kg to 32,1507465686 uncji trojańskich', () {
@@ -54,7 +67,8 @@ void main() {
 
   testWidgets('Portfel pokazuje cenę referencyjną i podsumowanie',
       (tester) async {
-    await tester.pumpWidget(const SystemMetaliApp());
+    await tester.pumpWidget(SystemMetaliApp(storage: MemoryPortfolioStorage()));
+    await tester.pumpAndSettle();
     expect(find.text('Mój portfel'), findsOneWidget);
     expect(find.text('13 680,00 zł'), findsOneWidget);
     expect(find.text(moneyPln(0.75 * referenceGoldPlnOz +
@@ -62,7 +76,8 @@ void main() {
   });
 
   testWidgets('Transakcje zawierają dwa przykładowe zakupy', (tester) async {
-    await tester.pumpWidget(const SystemMetaliApp());
+    await tester.pumpWidget(SystemMetaliApp(storage: MemoryPortfolioStorage()));
+    await tester.pumpAndSettle();
     await tester.tap(find.text('Transakcje'));
     await tester.pumpAndSettle();
     expect(find.text('Historia transakcji'), findsOneWidget);
@@ -71,7 +86,8 @@ void main() {
 
   testWidgets('Dodanie zakupu zwiększa liczbę i wartość zakupów',
       (tester) async {
-    await tester.pumpWidget(const SystemMetaliApp());
+    await tester.pumpWidget(SystemMetaliApp(storage: MemoryPortfolioStorage()));
+    await tester.pumpAndSettle();
     await tester.tap(find.text('Transakcje'));
     await tester.pumpAndSettle();
     await tester.tap(find.byKey(const ValueKey('add_transaction_button')));
@@ -89,7 +105,8 @@ void main() {
 
   testWidgets('Można wybrać kilogramy i cenę PLN/kg w formularzu',
       (tester) async {
-    await tester.pumpWidget(const SystemMetaliApp());
+    await tester.pumpWidget(SystemMetaliApp(storage: MemoryPortfolioStorage()));
+    await tester.pumpAndSettle();
     await tester.tap(find.text('Transakcje'));
     await tester.pumpAndSettle();
     await tester.tap(find.byKey(const ValueKey('add_transaction_button')));
@@ -115,7 +132,8 @@ void main() {
   });
 
   testWidgets('Zmiana kursu złota zmienia wycenę portfela', (tester) async {
-    await tester.pumpWidget(const SystemMetaliApp());
+    await tester.pumpWidget(SystemMetaliApp(storage: MemoryPortfolioStorage()));
+    await tester.pumpAndSettle();
     await tester.tap(find.text('Kursy'));
     await tester.pumpAndSettle();
     expect(find.text('Kursy metali'), findsOneWidget);
@@ -131,7 +149,8 @@ void main() {
   });
 
   testWidgets('Usunięcie zakupu zmniejsza liczbę transakcji', (tester) async {
-    await tester.pumpWidget(const SystemMetaliApp());
+    await tester.pumpWidget(SystemMetaliApp(storage: MemoryPortfolioStorage()));
+    await tester.pumpAndSettle();
     await tester.tap(find.text('Transakcje'));
     await tester.pumpAndSettle();
     await tester.tap(find.byKey(const ValueKey('delete_transaction_1')));
@@ -141,4 +160,123 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('1 transakcja'), findsOneWidget);
   });
+
+  test('Zapis JSON odtwarza transakcję kg oraz ręczne ceny', () {
+    final snapshot = PortfolioSnapshot(
+      investments: [
+        Investment(
+          id: 123,
+          date: DateTime(2026, 11, 20),
+          metal: 'Srebro',
+          amount: 0.5,
+          amountUnit: 'kg',
+          purchasePrice: 5000,
+          purchasePriceUnit: 'kg',
+        ),
+      ],
+      goldPricePlnOz: 19000,
+      silverPricePlnOz: 200,
+      goldEdited: true,
+      silverEdited: true,
+    );
+    final copy = PortfolioSnapshot.decode(snapshot.encode());
+    expect(copy.investments.single.metal, 'Srebro');
+    expect(copy.investments.single.amountUnit, 'kg');
+    expect(copy.investments.single.purchasePriceUnit, 'kg');
+    expect(copy.investments.single.purchaseValue, closeTo(2500, 0.001));
+    expect(copy.goldPricePlnOz, 19000);
+    expect(copy.silverPricePlnOz, 200);
+    expect(copy.goldEdited, isTrue);
+    expect(copy.silverEdited, isTrue);
+  });
+
+  test('Pusty portfel też jest poprawnie zapisywany', () {
+    final snapshot = PortfolioSnapshot(
+      investments: const [],
+      goldPricePlnOz: referenceGoldPlnOz,
+      silverPricePlnOz: referenceSilverPlnOz,
+      goldEdited: false,
+      silverEdited: false,
+    );
+    expect(PortfolioSnapshot.decode(snapshot.encode()).investments, isEmpty);
+  });
+
+  test('Uszkodzony lub nieznany format nie jest akceptowany', () {
+    expect(() => PortfolioSnapshot.decode('nie-jest-json'), throwsFormatException);
+    expect(() => PortfolioSnapshot.decode('{"schemaVersion":99}'), throwsFormatException);
+  });
+
+  testWidgets('Dodanie transakcji jest pamiętane po restarcie', (tester) async {
+    final storage = MemoryPortfolioStorage();
+    await tester.pumpWidget(SystemMetaliApp(storage: storage));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Transakcje'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('add_transaction_button')));
+    await tester.pumpAndSettle();
+    await tester.enterText(find.byKey(const ValueKey('amount_field')), '1');
+    await tester.enterText(find.byKey(const ValueKey('price_field')), '10000');
+    await tester.ensureVisible(find.byKey(const ValueKey('save_transaction_button')));
+    await tester.tap(find.byKey(const ValueKey('save_transaction_button')));
+    await tester.pumpAndSettle();
+    expect(storage.data, isNotNull);
+    await tester.pumpWidget(const SizedBox.shrink());
+    await tester.pumpWidget(SystemMetaliApp(storage: storage));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Transakcje'));
+    await tester.pumpAndSettle();
+    expect(find.text('3 transakcje'), findsOneWidget);
+    await tester.tap(find.text('Portfel'));
+    await tester.pumpAndSettle();
+    expect(find.text('23 680,00 zł'), findsOneWidget);
+  });
+
+  testWidgets('Usunięcie wszystkich transakcji pozostaje po restarcie', (tester) async {
+    final storage = MemoryPortfolioStorage();
+    await tester.pumpWidget(SystemMetaliApp(storage: storage));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Transakcje'));
+    await tester.pumpAndSettle();
+    for (final id in [1, 2]) {
+      await tester.tap(find.byKey(ValueKey('delete_transaction_$id')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Usuń'));
+      await tester.pumpAndSettle();
+    }
+    await tester.pumpWidget(const SizedBox.shrink());
+    await tester.pumpWidget(SystemMetaliApp(storage: storage));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Transakcje'));
+    await tester.pumpAndSettle();
+    expect(find.text('Nie masz jeszcze żadnych transakcji.'), findsOneWidget);
+    expect(PortfolioSnapshot.decode(storage.data!).investments, isEmpty);
+  });
+
+  testWidgets('Ręczna cena przetrwa ponowne uruchomienie', (tester) async {
+    final storage = MemoryPortfolioStorage();
+    await tester.pumpWidget(SystemMetaliApp(storage: storage));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Kursy'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('edit_market_price_gold')));
+    await tester.pumpAndSettle();
+    await tester.enterText(find.byKey(const ValueKey('market_price_field')), '20000');
+    await tester.tap(find.byKey(const ValueKey('save_market_price')));
+    await tester.pumpAndSettle();
+    await tester.pumpWidget(const SizedBox.shrink());
+    await tester.pumpWidget(SystemMetaliApp(storage: storage));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Kursy'));
+    await tester.pumpAndSettle();
+    expect(find.text('20 000,00 zł / oz'), findsOneWidget);
+    expect(PortfolioSnapshot.decode(storage.data!).goldEdited, isTrue);
+  });
+
+  testWidgets('Przy błędnym zapisie pojawia się ostrzeżenie', (tester) async {
+    final storage = MemoryPortfolioStorage()..data = 'błędny JSON';
+    await tester.pumpWidget(SystemMetaliApp(storage: storage));
+    await tester.pumpAndSettle();
+    expect(find.textContaining('Nie udało się odczytać'), findsOneWidget);
+  });
+
 }

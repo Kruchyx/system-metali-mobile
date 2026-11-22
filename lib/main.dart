@@ -1,4 +1,7 @@
+import 'dart:convert';
+
 import 'package:flutter/material.dart';
+import 'portfolio_storage.dart';
 
 void main() => runApp(const SystemMetaliApp());
 
@@ -80,10 +83,104 @@ class Investment {
   double roi(double currentPricePlnOz) => purchaseValue == 0
       ? 0
       : profit(currentPricePlnOz) / purchaseValue * 100;
+
+  Map<String, Object> toJson() => {
+        'id': id,
+        'date': date.toIso8601String(),
+        'metal': metal,
+        'amount': amount,
+        'amountUnit': amountUnit,
+        'purchasePrice': purchasePrice,
+        'purchasePriceUnit': purchasePriceUnit,
+      };
+
+  factory Investment.fromJson(Object? raw) {
+    if (raw is! Map<String, dynamic>) {
+      throw const FormatException('Nieprawidłowa transakcja');
+    }
+    final idValue = raw['id'];
+    final dateValue = raw['date'];
+    final metalValue = raw['metal'];
+    final amountValue = raw['amount'];
+    final amountUnitValue = raw['amountUnit'];
+    final priceValue = raw['purchasePrice'];
+    final priceUnitValue = raw['purchasePriceUnit'];
+    final date = dateValue is String ? DateTime.tryParse(dateValue) : null;
+    if (idValue is! int || date == null ||
+        (metalValue != 'Złoto' && metalValue != 'Srebro') ||
+        (amountUnitValue != 'oz' && amountUnitValue != 'kg') ||
+        (priceUnitValue != 'oz' && priceUnitValue != 'kg') ||
+        amountValue is! num || !amountValue.isFinite || amountValue <= 0 ||
+        priceValue is! num || !priceValue.isFinite || priceValue <= 0) {
+      throw const FormatException('Nieprawidłowe dane zapisanej transakcji');
+    }
+    return Investment(
+      id: idValue,
+      date: date,
+      metal: metalValue as String,
+      amount: amountValue.toDouble(),
+      amountUnit: amountUnitValue as String,
+      purchasePrice: priceValue.toDouble(),
+      purchasePriceUnit: priceUnitValue as String,
+    );
+  }
+}
+
+/// Stan aplikacji w jednym zapisie JSON, wraz z wersją formatu.
+class PortfolioSnapshot {
+  const PortfolioSnapshot({
+    required this.investments,
+    required this.goldPricePlnOz,
+    required this.silverPricePlnOz,
+    required this.goldEdited,
+    required this.silverEdited,
+  });
+
+  final List<Investment> investments;
+  final double goldPricePlnOz;
+  final double silverPricePlnOz;
+  final bool goldEdited;
+  final bool silverEdited;
+
+  String encode() => jsonEncode({
+        'schemaVersion': 1,
+        'investments': investments.map((tx) => tx.toJson()).toList(),
+        'goldPricePlnOz': goldPricePlnOz,
+        'silverPricePlnOz': silverPricePlnOz,
+        'goldEdited': goldEdited,
+        'silverEdited': silverEdited,
+      });
+
+  factory PortfolioSnapshot.decode(String text) {
+    final raw = jsonDecode(text);
+    if (raw is! Map<String, dynamic> || raw['schemaVersion'] != 1) {
+      throw const FormatException('Nieznana wersja zapisu portfela');
+    }
+    final entries = raw['investments'];
+    final gold = raw['goldPricePlnOz'];
+    final silver = raw['silverPricePlnOz'];
+    final goldFlag = raw['goldEdited'];
+    final silverFlag = raw['silverEdited'];
+    if (entries is! List || gold is! num || silver is! num ||
+        !gold.isFinite || !silver.isFinite || gold <= 0 || silver <= 0 ||
+        goldFlag is! bool || silverFlag is! bool) {
+      throw const FormatException('Nieprawidłowy zapis portfela');
+    }
+    return PortfolioSnapshot(
+      investments: entries.map(Investment.fromJson).toList(),
+      goldPricePlnOz: gold.toDouble(),
+      silverPricePlnOz: silver.toDouble(),
+      goldEdited: goldFlag,
+      silverEdited: silverFlag,
+    );
+  }
 }
 
 class SystemMetaliApp extends StatelessWidget {
-  const SystemMetaliApp({super.key});
+  const SystemMetaliApp({super.key, this.storage});
+
+  /// Podmiana magazynu w testach pozwala sprawdzać zapisy bez systemowych API.
+  final PortfolioStorage? storage;
 
   @override
   Widget build(BuildContext context) {
@@ -103,13 +200,15 @@ class SystemMetaliApp extends StatelessWidget {
           border: OutlineInputBorder(),
         ),
       ),
-      home: const MainScreen(),
+      home: MainScreen(storage: storage ?? PreferencesPortfolioStorage()),
     );
   }
 }
 
 class MainScreen extends StatefulWidget {
-  const MainScreen({super.key});
+  const MainScreen({super.key, required this.storage});
+
+  final PortfolioStorage storage;
 
   @override
   State<MainScreen> createState() => _MainScreenState();
@@ -121,9 +220,67 @@ class _MainScreenState extends State<MainScreen> {
   double silverPricePlnOz = referenceSilverPlnOz;
   bool goldEdited = false;
   bool silverEdited = false;
+  bool loadingSavedData = true;
+  String? storageWarning;
+  Future<void> pendingSave = Future<void>.value();
 
-  // Przykładowe transakcje. Ceny zakupu sa testowe i nie odzwierciedlaja
-  // rzeczywistych zakupow. Lokalna baza danych to osobny etap v0.4.
+  @override
+  void initState() {
+    super.initState();
+    _loadSavedState();
+  }
+
+  Future<void> _loadSavedState() async {
+    try {
+      final saved = await widget.storage.read();
+      final snapshot = saved == null ? null : PortfolioSnapshot.decode(saved);
+      if (!mounted) return;
+      setState(() {
+        if (snapshot != null) {
+          // Zapisana pusta lista pozostaje pusta po restarcie aplikacji.
+          investments
+            ..clear()
+            ..addAll(snapshot.investments);
+          goldPricePlnOz = snapshot.goldPricePlnOz;
+          silverPricePlnOz = snapshot.silverPricePlnOz;
+          goldEdited = snapshot.goldEdited;
+          silverEdited = snapshot.silverEdited;
+        }
+        loadingSavedData = false;
+      });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() {
+        loadingSavedData = false;
+        storageWarning = 'Nie udało się odczytać zapisanych danych. '
+            'Wyświetlane są dane przykładowe. Sprawdź pamięć aplikacji.';
+      });
+    }
+  }
+
+  void _saveState() {
+    final payload = PortfolioSnapshot(
+      investments: List<Investment>.of(investments),
+      goldPricePlnOz: goldPricePlnOz,
+      silverPricePlnOz: silverPricePlnOz,
+      goldEdited: goldEdited,
+      silverEdited: silverEdited,
+    ).encode();
+
+    // Operacje zapisujemy po kolei, aby wolniejszy zapis nie nadpisał nowszego.
+    pendingSave = pendingSave.then((_) => widget.storage.write(payload)).catchError(
+      (Object _) {
+        if (!mounted) return;
+        setState(() {
+          storageWarning = 'Nie udało się zapisać zmian. '
+              'Sprawdź wolne miejsce i ustawienia przeglądarki.';
+        });
+      },
+    );
+  }
+
+  // Przykładowe transakcje są widoczne tylko przed pierwszym zapisem.
+  // Po zmianie i restarcie odtwarzamy rzeczywisty zapis użytkownika.
   final List<Investment> investments = [
     Investment(
       id: 1,
@@ -170,6 +327,7 @@ class _MainScreenState extends State<MainScreen> {
     );
     if (!mounted || transaction == null) return;
     setState(() => investments.add(transaction));
+    _saveState();
     ScaffoldMessenger.of(context).showSnackBar(
       const SnackBar(content: Text('Transakcja została dodana')),
     );
@@ -197,6 +355,7 @@ class _MainScreenState extends State<MainScreen> {
     );
     if (!mounted || answer != true) return;
     setState(() => investments.removeWhere((item) => item.id == tx.id));
+    _saveState();
   }
 
   Future<void> _editPrice(String metal) async {
@@ -217,6 +376,7 @@ class _MainScreenState extends State<MainScreen> {
         silverEdited = true;
       }
     });
+    _saveState();
   }
 
   @override
@@ -229,13 +389,31 @@ class _MainScreenState extends State<MainScreen> {
           style: TextStyle(fontWeight: FontWeight.w700, fontSize: 19),
         ),
       ),
-      body: switch (selectedIndex) {
-        0 => _portfolioScreen(),
-        1 => _transactionsScreen(),
-        2 => _marketScreen(),
-        _ => _comingSoonScreen(titles[selectedIndex]),
-      },
-      floatingActionButton: selectedIndex == 1
+      body: loadingSavedData
+          ? const Center(child: CircularProgressIndicator())
+          : Column(
+              children: [
+                if (storageWarning != null)
+                  MaterialBanner(
+                    content: Text(storageWarning!),
+                    actions: [
+                      TextButton(
+                        onPressed: () => setState(() => storageWarning = null),
+                        child: const Text('Zamknij'),
+                      ),
+                    ],
+                  ),
+                Expanded(
+                  child: switch (selectedIndex) {
+                    0 => _portfolioScreen(),
+                    1 => _transactionsScreen(),
+                    2 => _marketScreen(),
+                    _ => _comingSoonScreen(titles[selectedIndex]),
+                  },
+                ),
+              ],
+            ),
+      floatingActionButton: !loadingSavedData && selectedIndex == 1
           ? FloatingActionButton.extended(
               key: const ValueKey('add_transaction_button'),
               onPressed: _addTransaction,
@@ -334,7 +512,7 @@ class _MainScreenState extends State<MainScreen> {
         const SizedBox(height: 14),
         const Text(
           'Ceny wyceny można zmienić w zakładce Kursy. '
-          'Dane nie są pobierane na żywo.',
+          'Dane nie są pobierane na żywo. Zmiany zapisują się lokalnie.',
           style: TextStyle(color: Color(0xFF64748B), fontSize: 13),
         ),
       ]);
